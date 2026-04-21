@@ -1,3 +1,26 @@
-# sibbp-competitor-bot-v12
+# SIBBP Competitor Bot v12
 
-Telegram bot for competitor analytics of commercial real estate.
+Telegram-бот для аналитики конкурентов коммерческой недвижимости.
+
+## Возможности
+- проверка текущей сводки по выбранному конкуренту
+- выгрузка Excel-отчётов
+- динамика свободных площадей
+- сводка по всем конкурентам
+- журнал изменений, архив и приоритет прозвона
+- ручное добавление и обновление конкурентов без сайта
+
+## Переменные окружения
+- `BOT_TOKEN` — токен Telegram-бота
+- `CHAT_ID` — ID чата для автоматических рассылок
+- `BASE_URL` — базовый URL сайта конкурента
+- `REQUEST_TIMEOUT` — таймаут HTTP-запросов в секундах
+
+## Локальный запуск
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+## Deploy на Render
+В репозитории уже есть `render.yaml` для тестового деплоя.
