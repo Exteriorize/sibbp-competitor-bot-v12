@@ -1,1 +1,5 @@
-snapshot_date,snapshot_datetime,competitor_code,competitor_name,entity_role,count,total_area,avg_price,total_price,unconfirmed_count,removed_count,data_freshness,last_checked_at
+﻿snapshot_date,snapshot_datetime,competitor_code,competitor_name,count,total_area,avg_price,total_price,unconfirmed_count,removed_count,data_freshness,last_checked_at,entity_role
+2026-04-15,2026-04-15 01:47:41,eltsovka1,Ельцовка-1,16,498.0,498.31,248160.0,0,0,свежие,2026-04-15 01:47:41,own_company
+2026-04-11,2026-04-11 21:39:08,sibbp,Сибирский бизнес парк,9,3135.3,465.49,1459447.0,0,0,свежие,2026-04-11 21:39:08,
+2026-04-15,2026-04-15 01:47:41,sibbp,Сибирский бизнес парк,9,3135.3,465.49,1459447.0,0,0,свежие,2026-04-15 01:47:41,competitor
+2026-04-22,2026-04-22 00:38:32,sibbp,Сибирский бизнес парк,0,0.0,0.0,0.0,0,0,свежие,2026-04-22 00:38:32,competitor
