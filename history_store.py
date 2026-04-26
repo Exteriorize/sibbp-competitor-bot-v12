@@ -133,44 +133,31 @@ def get_portfolio_history() -> List[Dict]:
 
 
 def get_role_comparison_history() -> List[Dict]:
+    """Return long-format history for the own-company-vs-competitors report.
+
+    Earlier the report aggregated all competitors into one line. For the final
+    analytics view we keep each competitor as a separate series and let the
+    Excel builder pivot these rows into one column group per company.
+    """
     df = read_history()
     if df.empty:
         return []
 
     competitors = refresh_competitors()
     if "entity_role" not in df.columns:
-        df["entity_role"] = df["competitor_code"].map(lambda code: str((competitors.get(code) or {}).get("entity_role") or "competitor"))
-    else:
-        df["entity_role"] = df.apply(
-            lambda row: str(row.get("entity_role") or (competitors.get(str(row.get("competitor_code") or "")) or {}).get("entity_role") or "competitor"),
-            axis=1,
-        )
+        df["entity_role"] = ""
 
-    records: List[Dict] = []
-    for snapshot_date, group in df.groupby("snapshot_date"):
-        own = group.loc[group["entity_role"] == "own_company"].copy()
-        comp = group.loc[group["entity_role"] != "own_company"].copy()
+    df["entity_role"] = df.apply(
+        lambda row: str(row.get("entity_role") or (competitors.get(str(row.get("competitor_code") or "")) or {}).get("entity_role") or "competitor"),
+        axis=1,
+    )
+    df["competitor_name"] = df.apply(
+        lambda row: str(row.get("competitor_name") or (competitors.get(str(row.get("competitor_code") or "")) or {}).get("name") or row.get("competitor_code") or ""),
+        axis=1,
+    )
 
-        def _sum(frame: pd.DataFrame, field: str):
-            return float(frame[field].sum()) if not frame.empty else 0.0
+    for column in ("count", "total_area", "avg_price", "total_price", "unconfirmed_count", "removed_count"):
+        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
 
-        own_area = _sum(own, "total_area")
-        own_total = _sum(own, "total_price")
-        comp_area = _sum(comp, "total_area")
-        comp_total = _sum(comp, "total_price")
-        records.append(
-            {
-                "snapshot_date": snapshot_date,
-                "own_count": int(_sum(own, "count")),
-                "own_total_area": own_area,
-                "own_avg_price": round(own_total / own_area, 2) if own_area > 0 else 0.0,
-                "own_total_price": own_total,
-                "competitors_count": int(_sum(comp, "count")),
-                "competitors_total_area": comp_area,
-                "competitors_avg_price": round(comp_total / comp_area, 2) if comp_area > 0 else 0.0,
-                "competitors_total_price": comp_total,
-                "competitors_included": int(comp["competitor_code"].nunique()) if not comp.empty else 0,
-            }
-        )
-    records.sort(key=lambda row: row["snapshot_date"])
-    return records
+    df = df.sort_values(["snapshot_date", "competitor_name", "snapshot_datetime"])
+    return df.to_dict("records")
