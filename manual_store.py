@@ -107,24 +107,26 @@ def _safe_float(value: object) -> float:
         return 0.0
 
 
+def _checked_date(value: object) -> str:
+    dt = _parse_datetime(str(value or ""))
+    return dt.strftime("%Y-%m-%d") if dt else ""
+
+
 def load_manual_competitors() -> List[Dict]:
-    competitors = _read_json(MANUAL_COMPETITORS_PATH)
     result: List[Dict] = []
-    for item in competitors:
+    for item in _read_json(MANUAL_COMPETITORS_PATH):
         name = _normalize_name(str(item.get("name", "")))
         code = str(item.get("code", "")).strip()
         if not name or not code:
             continue
-        result.append(
-            {
-                "code": code,
-                "name": name,
-                "short_name": str(item.get("short_name") or name),
-                "enabled": bool(item.get("enabled", True)),
-                "mode": "manual",
-                "entity_role": str(item.get("entity_role") or "competitor"),
-            }
-        )
+        result.append({
+            "code": code,
+            "name": name,
+            "short_name": str(item.get("short_name") or name),
+            "enabled": bool(item.get("enabled", True)),
+            "mode": "manual",
+            "entity_role": str(item.get("entity_role") or "competitor"),
+        })
     return result
 
 
@@ -136,8 +138,11 @@ def upsert_manual_competitor(name: str, entity_role: str = "competitor") -> Dict
     competitors = load_manual_competitors()
     for item in competitors:
         if item["name"].lower() == name.lower():
+            changed = False
             if item.get("entity_role") != entity_role:
                 item["entity_role"] = entity_role
+                changed = True
+            if changed:
                 _write_json(MANUAL_COMPETITORS_PATH, competitors)
             return item
 
@@ -163,16 +168,16 @@ def upsert_manual_competitor(name: str, entity_role: str = "competitor") -> Dict
 
 
 def load_manual_records() -> List[Dict]:
-    records = _read_json(MANUAL_RECORDS_PATH)
     result: List[Dict] = []
-    for item in records:
+    for item in _read_json(MANUAL_RECORDS_PATH):
         competitor_code = str(item.get("competitor_code", "")).strip()
         competitor_name = _normalize_name(str(item.get("competitor_name", "")))
         if not competitor_code or not competitor_name:
             continue
-        item["competitor_code"] = competitor_code
-        item["competitor_name"] = competitor_name
-        result.append(item)
+        row = dict(item)
+        row["competitor_code"] = competitor_code
+        row["competitor_name"] = competitor_name
+        result.append(row)
     return result
 
 
@@ -229,9 +234,8 @@ def list_latest_manual_records() -> List[Dict]:
 
 
 def load_manual_items() -> List[Dict]:
-    items = _read_json(MANUAL_ITEMS_PATH)
     result: List[Dict] = []
-    for item in items:
+    for item in _read_json(MANUAL_ITEMS_PATH):
         competitor_code = str(item.get("competitor_code", "")).strip()
         competitor_name = _normalize_name(str(item.get("competitor_name", "")))
         item_id = str(item.get("id", "")).strip()
@@ -244,6 +248,23 @@ def load_manual_items() -> List[Dict]:
         row.setdefault("status", "active")
         result.append(row)
     return result
+
+
+def clear_manual_items_for_competitor(competitor_code: str) -> int:
+    """Remove current manual rooms for a competitor from the active manual base.
+
+    Historical dynamics are kept separately in data/history.csv, so this cleanup
+    prevents old and new manual rooms from being summed together.
+    """
+    competitor_code = str(competitor_code or "").strip()
+    if not competitor_code:
+        return 0
+    items = load_manual_items()
+    filtered = [item for item in items if str(item.get("competitor_code", "")).strip() != competitor_code]
+    deleted = len(items) - len(filtered)
+    if deleted:
+        _write_json(MANUAL_ITEMS_PATH, filtered)
+    return deleted
 
 
 def save_manual_item(record: Dict) -> Dict:
@@ -282,8 +303,20 @@ def save_manual_item(record: Dict) -> Dict:
 
     checked_at_dt = _parse_datetime(str(record.get("checked_at") or "")) or datetime.now()
     checked_at = checked_at_dt.strftime("%Y-%m-%d %H:%M:%S")
+    checked_day = checked_at_dt.strftime("%Y-%m-%d")
     review_due_at = (checked_at_dt + timedelta(days=MANUAL_REVIEW_DAYS)).strftime("%Y-%m-%d")
     expire_at = (checked_at_dt + timedelta(days=MANUAL_EXPIRE_DAYS)).strftime("%Y-%m-%d")
+
+    items = load_manual_items()
+    old_items = [item for item in items if item.get("competitor_code") == competitor_code]
+    has_same_day_batch = any(_checked_date(item.get("checked_at")) == checked_day for item in old_items)
+    replace_existing = bool(record.get("replace_existing") or record.get("start_new_revision"))
+
+    # Final business rule: a manual competitor has only one current revision.
+    # When the first room of a new check date is added, old current rooms are
+    # removed so they are not summed with the new actual list.
+    if old_items and (replace_existing or not has_same_day_batch):
+        items = [item for item in items if item.get("competitor_code") != competitor_code]
 
     payload = {
         "id": str(record.get("id") or uuid4().hex[:12]),
@@ -307,7 +340,6 @@ def save_manual_item(record: Dict) -> Dict:
         "status": str(record.get("status") or "active"),
     }
 
-    items = load_manual_items()
     items.append(payload)
     _write_json(MANUAL_ITEMS_PATH, items)
     return payload
@@ -425,11 +457,7 @@ def delete_manual_competitor_data(competitor_code: str) -> Dict[str, int]:
     deleted_records = len(records) - len(filtered_records)
     _write_json(MANUAL_RECORDS_PATH, filtered_records)
 
-    items = load_manual_items()
-    filtered_items = [item for item in items if str(item.get('competitor_code', '')).strip() != competitor_code]
-    deleted_items = len(items) - len(filtered_items)
-    _write_json(MANUAL_ITEMS_PATH, filtered_items)
-
+    deleted_items = clear_manual_items_for_competitor(competitor_code)
     return {'deleted_records': deleted_records, 'deleted_competitors': deleted_competitors, 'deleted_items': deleted_items}
 
 
@@ -456,22 +484,20 @@ def list_manual_review_rows() -> List[Dict]:
         decorated = _decorate_manual_item(item)
         if decorated.get("review_status") == "fresh":
             continue
-        rows.append(
-            {
-                "item_id": decorated.get("id", ""),
-                "Конкурент": decorated.get("competitor_name", ""),
-                "Помещение": decorated.get("title", ""),
-                "Тип": decorated.get("type_label", decorated.get("type", "")),
-                "Возраст, дней": decorated.get("age_days", 0),
-                "Статус": decorated.get("review_status_label", ""),
-                "Площадь, м²": _safe_float(decorated.get("area", 0)),
-                "Ставка за м², ₽": _safe_float(decorated.get("price_per_sqm", 0)),
-                "Общая стоимость, ₽": _safe_float(decorated.get("total_price", 0)),
-                "Источник": decorated.get("source_label", ""),
-                "Последняя проверка": decorated.get("checked_at", ""),
-                "Ссылка": decorated.get("source_url", ""),
-            }
-        )
+        rows.append({
+            "item_id": decorated.get("id", ""),
+            "Конкурент": decorated.get("competitor_name", ""),
+            "Помещение": decorated.get("title", ""),
+            "Тип": decorated.get("type_label", decorated.get("type", "")),
+            "Возраст, дней": decorated.get("age_days", 0),
+            "Статус": decorated.get("review_status_label", ""),
+            "Площадь, м²": _safe_float(decorated.get("area", 0)),
+            "Ставка за м², ₽": _safe_float(decorated.get("price_per_sqm", 0)),
+            "Общая стоимость, ₽": _safe_float(decorated.get("total_price", 0)),
+            "Источник": decorated.get("source_label", ""),
+            "Последняя проверка": decorated.get("checked_at", ""),
+            "Ссылка": decorated.get("source_url", ""),
+        })
     rows.sort(key=lambda row: (row.get("Возраст, дней", 0), row.get("Конкурент", "")), reverse=True)
     return rows
 
@@ -491,20 +517,18 @@ def build_items_from_manual_record(record: Optional[Dict]) -> List[Dict]:
         total_price = round(area * price_per_sqm, 2)
 
     title = str(record.get("comment") or "Ручная запись").strip() or "Ручная запись"
-    return [
-        {
-            "company": record.get("competitor_name", ""),
-            "type": "Ручной учет",
-            "title": title,
-            "area": round(area, 2),
-            "price_value": round(price_per_sqm, 2),
-            "price_per_sqm": round(price_per_sqm, 2),
-            "total_price_value": round(total_price, 2),
-            "total_price": round(total_price, 2),
-            "url": record.get("source_url", ""),
-            "source_url": record.get("source_url", ""),
-            "source_label": record.get("source_label", "Другое"),
-            "reliability_label": record.get("reliability_label", "Средняя"),
-            "checked_at": record.get("checked_at", ""),
-        }
-    ]
+    return [{
+        "company": record.get("competitor_name", ""),
+        "type": "Ручной учет",
+        "title": title,
+        "area": round(area, 2),
+        "price_value": round(price_per_sqm, 2),
+        "price_per_sqm": round(price_per_sqm, 2),
+        "total_price_value": round(total_price, 2),
+        "total_price": round(total_price, 2),
+        "url": record.get("source_url", ""),
+        "source_url": record.get("source_url", ""),
+        "source_label": record.get("source_label", "Другое"),
+        "reliability_label": record.get("reliability_label", "Средняя"),
+        "checked_at": record.get("checked_at", ""),
+    }]
