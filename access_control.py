@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
-from functools import wraps
-from typing import Callable, Dict, Iterable, Set
+from typing import Dict, Iterable, Set
 
 from aiogram import types
+from aiogram.dispatcher.handler import CancelHandler
+from aiogram.dispatcher.middlewares import BaseMiddleware
 
 try:
     from config import CHAT_ID
@@ -16,6 +17,25 @@ ADMIN = "admin"
 EDITOR = "editor"
 DIRECTOR = "director"
 DENIED = "denied"
+
+ROLE_LABELS = {
+    ADMIN: "Админ",
+    EDITOR: "Заполняющий",
+    DIRECTOR: "Директор",
+    DENIED: "Нет доступа",
+}
+
+DENIED_TEXT = (
+    "⛔ У вас нет доступа к этому разделу.\n\n"
+    "Ваш Telegram ID: <code>{user_id}</code>\n"
+    "Отправьте этот ID администратору, чтобы он добавил вас в нужный профиль."
+)
+
+UNKNOWN_TEXT = (
+    "⛔ Бот закрыт для посторонних пользователей.\n\n"
+    "Ваш Telegram ID: <code>{user_id}</code>\n"
+    "Передайте этот ID администратору, чтобы он добавил вас в нужный профиль."
+)
 
 
 def _parse_ids(value: str) -> Set[int]:
@@ -31,17 +51,21 @@ def _parse_ids(value: str) -> Set[int]:
     return result
 
 
-ADMIN_IDS = _parse_ids(os.getenv("ADMIN_IDS", str(CHAT_ID or "")))
-EDITOR_IDS = _parse_ids(os.getenv("EDITOR_IDS", ""))
-DIRECTOR_IDS = _parse_ids(os.getenv("DIRECTOR_IDS", ""))
+def _env_ids(name: str, default: str = "") -> Set[int]:
+    return _parse_ids(os.getenv(name, default))
 
 
-ROLE_LABELS = {
-    ADMIN: "Админ",
-    EDITOR: "Заполняющий",
-    DIRECTOR: "Директор",
-    DENIED: "Нет доступа",
-}
+def admin_ids() -> Set[int]:
+    default_admin = str(CHAT_ID or "")
+    return _env_ids("ADMIN_IDS", default_admin)
+
+
+def editor_ids() -> Set[int]:
+    return _env_ids("EDITOR_IDS", "")
+
+
+def director_ids() -> Set[int]:
+    return _env_ids("DIRECTOR_IDS", "")
 
 
 ADMIN_TEXTS = {
@@ -62,7 +86,6 @@ ADMIN_TEXTS = {
     "Удалить ручного конкурента",
 }
 
-
 EDITOR_TEXTS = {
     "Выбор объекта",
     "Проверить текущую сводку",
@@ -72,7 +95,6 @@ EDITOR_TEXTS = {
     "Приоритет прозвона",
     "Удалить помещение",
 }
-
 
 DIRECTOR_TEXTS = {
     "Выбор объекта",
@@ -87,9 +109,43 @@ DIRECTOR_TEXTS = {
     "Изменения",
 }
 
+PUBLIC_COMMANDS = {"/myid"}
+COMMON_COMMANDS = {"/start", "/menu", "/cancel"}
 
-COMMON_COMMANDS = {"/start", "/menu", "/cancel", "/myid"}
+ADMIN_COMMANDS = {
+    "/check",
+    "/report",
+    "/dynamic",
+    "/compare",
+    "/all",
+    "/allreport",
+    "/add_competitor",
+    "/add_room",
+    "/review",
+    "/priority",
+    "/changes",
+    "/archive",
+}
 
+EDITOR_COMMANDS = {
+    "/check",
+    "/add_competitor",
+    "/add_room",
+    "/review",
+    "/priority",
+}
+
+DIRECTOR_COMMANDS = {
+    "/check",
+    "/report",
+    "/dynamic",
+    "/compare",
+    "/all",
+    "/allreport",
+    "/priority",
+    "/changes",
+    "/archive",
+}
 
 EDITOR_CALLBACK_PREFIXES = (
     "select:",
@@ -98,16 +154,15 @@ EDITOR_CALLBACK_PREFIXES = (
     "roomcomp:",
     "roomtype:",
     "roomsource:",
-    "reliability:",
     "source:",
     "aggstatus:",
     "aggreliability:",
+    "reliability:",
     "delroom:",
     "confirm:cancel:",
     "confirm:room:",
     "confirm:delroom:",
 )
-
 
 DIRECTOR_CALLBACK_PREFIXES = (
     "select:",
@@ -121,60 +176,28 @@ DIRECTOR_CALLBACK_PREFIXES = (
 
 def get_role(user_id: int) -> str:
     user_id = int(user_id or 0)
-    if user_id in ADMIN_IDS:
+    if user_id in admin_ids():
         return ADMIN
-    if user_id in EDITOR_IDS:
+    if user_id in editor_ids():
         return EDITOR
-    if user_id in DIRECTOR_IDS:
+    if user_id in director_ids():
         return DIRECTOR
     return DENIED
 
 
-def _is_command(text: str, command: str) -> bool:
-    text = str(text or "").strip()
-    return text == command or text.startswith(command + "@")
+def _command(text: str) -> str:
+    value = str(text or "").strip()
+    if not value.startswith("/"):
+        return ""
+    return value.split(maxsplit=1)[0].split("@", 1)[0].lower()
+
+
+def _starts_with(value: str, prefixes: Iterable[str]) -> bool:
+    return any(str(value or "").startswith(prefix) for prefix in prefixes)
 
 
 def _has_active_flow(flow: Dict[int, Dict[str, object]], user_id: int) -> bool:
     return bool(flow.get(int(user_id or 0)))
-
-
-def is_message_allowed(user_id: int, text: str, flow: Dict[int, Dict[str, object]]) -> bool:
-    text = str(text or "").strip()
-    role = get_role(user_id)
-
-    if _is_command(text, "/myid"):
-        return True
-    if role == DENIED:
-        return False
-    if role == ADMIN:
-        return True
-    if text in COMMON_COMMANDS:
-        return True
-    if _has_active_flow(flow, user_id) and role == EDITOR:
-        return True
-    if role == EDITOR:
-        return text in EDITOR_TEXTS
-    if role == DIRECTOR:
-        return text in DIRECTOR_TEXTS
-    return False
-
-
-def is_callback_allowed(user_id: int, data: str, flow: Dict[int, Dict[str, object]]) -> bool:
-    data = str(data or "")
-    role = get_role(user_id)
-
-    if role == DENIED:
-        return False
-    if role == ADMIN:
-        return True
-    if _has_active_flow(flow, user_id) and role == EDITOR:
-        return True
-    if role == EDITOR:
-        return data.startswith(EDITOR_CALLBACK_PREFIXES)
-    if role == DIRECTOR:
-        return data.startswith(DIRECTOR_CALLBACK_PREFIXES)
-    return False
 
 
 def role_menu_hint(user_id: int) -> str:
@@ -200,8 +223,7 @@ def allowed_buttons_for_role(user_id: int, all_buttons: Iterable[str]) -> Set[st
 
 
 async def send_myid(message: types.Message) -> None:
-    user = message.from_user
-    user_id = user.id if user else 0
+    user_id = message.from_user.id if message.from_user else 0
     await message.answer(
         f"Ваш Telegram ID: <code>{user_id}</code>\n"
         f"Роль: <b>{ROLE_LABELS.get(get_role(user_id), 'Нет доступа')}</b>\n"
@@ -209,65 +231,73 @@ async def send_myid(message: types.Message) -> None:
     )
 
 
-async def deny_message(message: types.Message) -> None:
-    user = message.from_user
-    user_id = user.id if user else 0
-    await message.answer(
-        "⛔ У вас нет доступа к этому разделу.\n\n"
-        f"Ваш Telegram ID: <code>{user_id}</code>\n"
-        "Отправьте этот ID администратору, чтобы он добавил вас в нужный профиль."
-    )
+class AccessControlMiddleware(BaseMiddleware):
+    def __init__(self, flow: Dict[int, Dict[str, object]]):
+        super().__init__()
+        self.flow = flow
+
+    def _message_allowed(self, user_id: int, text: str) -> bool:
+        role = get_role(user_id)
+        command = _command(text)
+        text = str(text or "").strip()
+
+        if command in PUBLIC_COMMANDS:
+            return True
+        if role == DENIED:
+            return False
+        if role == ADMIN:
+            return True
+        if command in COMMON_COMMANDS:
+            return True
+        if _has_active_flow(self.flow, user_id) and role == EDITOR:
+            return True
+        if role == EDITOR:
+            return text in EDITOR_TEXTS or command in EDITOR_COMMANDS
+        if role == DIRECTOR:
+            return text in DIRECTOR_TEXTS or command in DIRECTOR_COMMANDS
+        return False
+
+    def _callback_allowed(self, user_id: int, data: str) -> bool:
+        role = get_role(user_id)
+        data = str(data or "")
+
+        if role == DENIED:
+            return False
+        if role == ADMIN:
+            return True
+        if _has_active_flow(self.flow, user_id) and role == EDITOR:
+            return True
+        if role == EDITOR:
+            return _starts_with(data, EDITOR_CALLBACK_PREFIXES)
+        if role == DIRECTOR:
+            return _starts_with(data, DIRECTOR_CALLBACK_PREFIXES)
+        return False
+
+    async def on_pre_process_message(self, message: types.Message, data: dict) -> None:
+        user_id = message.from_user.id if message.from_user else 0
+        text = message.text or ""
+        command = _command(text)
+
+        if command == "/myid":
+            await send_myid(message)
+            raise CancelHandler()
+
+        if not self._message_allowed(user_id, text):
+            role = get_role(user_id)
+            await message.answer(DENIED_TEXT.format(user_id=user_id) if role != DENIED else UNKNOWN_TEXT.format(user_id=user_id))
+            raise CancelHandler()
+
+    async def on_pre_process_callback_query(self, callback_query: types.CallbackQuery, data: dict) -> None:
+        user_id = callback_query.from_user.id if callback_query.from_user else 0
+        if not self._callback_allowed(user_id, callback_query.data or ""):
+            await callback_query.answer("У вас нет доступа к этому разделу", show_alert=True)
+            raise CancelHandler()
 
 
-async def deny_callback(callback: types.CallbackQuery) -> None:
-    await callback.answer("У вас нет доступа к этому разделу", show_alert=True)
+def setup_access_control(dp, flow: Dict[int, Dict[str, object]]) -> None:
+    dp.middleware.setup(AccessControlMiddleware(flow))
 
 
+# Backward-compatible name. main.py may still import this.
 def apply_access_control(dp, flow: Dict[int, Dict[str, object]]) -> None:
-    """Wrap already registered aiogram handlers with role checks.
-
-    This keeps the existing bot_app.py almost unchanged and applies access rules
-    centrally after all handlers are registered.
-    """
-
-    def wrap_message_handler(fn: Callable):
-        if getattr(fn, "_access_wrapped", False):
-            return fn
-
-        @wraps(fn)
-        async def wrapped(message: types.Message, *args, **kwargs):
-            text = str(message.text or "").strip()
-            user_id = message.from_user.id if message.from_user else 0
-            if _is_command(text, "/myid"):
-                await send_myid(message)
-                return
-            if not is_message_allowed(user_id, text, flow):
-                await deny_message(message)
-                return
-            return await fn(message, *args, **kwargs)
-
-        wrapped._access_wrapped = True
-        return wrapped
-
-    def wrap_callback_handler(fn: Callable):
-        if getattr(fn, "_access_wrapped", False):
-            return fn
-
-        @wraps(fn)
-        async def wrapped(callback: types.CallbackQuery, *args, **kwargs):
-            user_id = callback.from_user.id if callback.from_user else 0
-            if not is_callback_allowed(user_id, callback.data or "", flow):
-                await deny_callback(callback)
-                return
-            return await fn(callback, *args, **kwargs)
-
-        wrapped._access_wrapped = True
-        return wrapped
-
-    for handler_obj in getattr(dp.message_handlers, "handlers", []):
-        if hasattr(handler_obj, "handler"):
-            handler_obj.handler = wrap_message_handler(handler_obj.handler)
-
-    for handler_obj in getattr(dp.callback_query_handlers, "handlers", []):
-        if hasattr(handler_obj, "handler"):
-            handler_obj.handler = wrap_callback_handler(handler_obj.handler)
+    setup_access_control(dp, flow)
