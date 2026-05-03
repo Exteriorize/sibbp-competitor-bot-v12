@@ -6,6 +6,7 @@ from aiogram import executor
 
 from access_control import apply_access_control, send_myid
 from bot_app import FLOW, dp
+from extra_features import setup_extra_features
 from scheduler_jobs import on_shutdown_scheduler, on_startup_scheduler
 
 
@@ -30,10 +31,13 @@ def run_health_server():
     server.serve_forever()
 
 
+# Extra analytics, Excel template/import and revision workflow.
+setup_extra_features(dp, FLOW)
+
 # Public helper command for getting Telegram ID.
 dp.register_message_handler(send_myid, commands=["myid"])
 
-# Apply role checks after all handlers from bot_app.py are registered.
+# Apply role checks after all handlers are registered.
 apply_access_control(dp, FLOW)
 
 
