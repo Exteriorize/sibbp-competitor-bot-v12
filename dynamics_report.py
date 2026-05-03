@@ -37,12 +37,12 @@ def _style_table(ws):
         for col in range(1, ws.max_column + 1):
             h = str(ws.cell(1, col).value or '').lower()
             cell = ws.cell(row, col)
-            if 'площад' in h or 'м²' in h:
-                cell.number_format = AREA_FORMAT
-            elif 'цена' in h or 'ставка' in h or '₽/м²' in h:
+            if 'цена' in h or 'ставка' in h or '₽/м²' in h or 'руб/м' in h:
                 cell.number_format = RUB_M2_FORMAT
             elif 'стоимость' in h or '₽' in h:
                 cell.number_format = RUB_FORMAT
+            elif 'площад' in h or 'м²' in h:
+                cell.number_format = AREA_FORMAT
             elif 'помещ' in h or 'количество' in h:
                 cell.number_format = INT_FORMAT
 
