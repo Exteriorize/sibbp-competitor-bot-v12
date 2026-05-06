@@ -8,6 +8,7 @@ from access_control import apply_access_control, send_myid
 from bot_app import FLOW, dp
 from dashboard_site import DashboardHandler
 from extra_features import setup_extra_features
+from more_buttons import setup_more_buttons
 from scheduler_jobs import on_shutdown_scheduler, on_startup_scheduler
 
 
@@ -19,6 +20,7 @@ def run_dashboard_server():
 
 # Extra analytics, Excel template/import and revision workflow.
 setup_extra_features(dp, FLOW)
+setup_more_buttons(dp, FLOW)
 
 # Public helper command for getting Telegram ID.
 dp.register_message_handler(send_myid, commands=["myid"])
